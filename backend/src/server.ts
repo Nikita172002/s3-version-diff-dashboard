@@ -5,7 +5,7 @@ import {
   S3Client,
   ListObjectVersionsCommand,
   GetObjectCommand,
-  PutObjectCommand
+  PutObjectCommand,
 } from "@aws-sdk/client-s3";
 
 dotenv.config();
@@ -30,10 +30,8 @@ const PORT = Number(process.env.PORT) || 3001;
 const BUCKET = process.env.BUCKET_NAME as string;
 const REGION = process.env.AWS_REGION || "ap-south-1";
 const PUBLIC_SDK_S3_DOMAIN =
-  process.env.PUBLIC_SDK_S3_DOMAIN ||
-  "https://d1jj6xo3ar94ay.cloudfront.net";
-const CF_DISTRIBUTION =
-  process.env.CF_DISTRIBUTION || "E1AZL9HCM1UQDL";
+  process.env.PUBLIC_SDK_S3_DOMAIN || "https://d1jj6xo3ar94ay.cloudfront.net";
+const CF_DISTRIBUTION = process.env.CF_DISTRIBUTION || "E1AZL9HCM1UQDL";
 
 if (!BUCKET) {
   console.error("ERROR: BUCKET_NAME is missing in .env");
@@ -49,16 +47,16 @@ const s3 = new S3Client({
   region: REGION,
   credentials: {
     accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || ""
-  }
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+  },
 });
 
-function getYesterday5PM(): Date {
+function getToday8PM(): Date {
   const now = new Date();
   const target = new Date(now);
-
   target.setDate(now.getDate() - 1);
-  target.setHours(17, 0, 0, 0);
+
+  target.setHours(20, 0, 0, 0);
 
   return target;
 }
@@ -69,20 +67,18 @@ async function streamToString(stream: any): Promise<string> {
 
     stream.on("data", (chunk: any) => chunks.push(chunk));
     stream.on("error", reject);
-    stream.on("end", () =>
-      resolve(Buffer.concat(chunks).toString("utf-8"))
-    );
+    stream.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
   });
 }
 
 app.get("/api/files", async (_req, res) => {
   try {
-    const cutoff = getYesterday5PM();
+    const cutoff = getToday8PM();
 
     const versions = await s3.send(
       new ListObjectVersionsCommand({
-        Bucket: BUCKET
-      })
+        Bucket: BUCKET,
+      }),
     );
 
     const grouped: Record<string, any[]> = {};
@@ -103,7 +99,7 @@ app.get("/api/files", async (_req, res) => {
       const sorted = grouped[key].sort(
         (a, b) =>
           new Date(a.LastModified!).getTime() -
-          new Date(b.LastModified!).getTime()
+          new Date(b.LastModified!).getTime(),
       );
 
       let older = null;
@@ -133,7 +129,7 @@ app.get("/api/files", async (_req, res) => {
         oldModified: older.LastModified,
         newModified: newer.LastModified,
         cdnUrl,
-        cloudfrontUrl
+        cloudfrontUrl,
       });
     }
 
@@ -142,33 +138,29 @@ app.get("/api/files", async (_req, res) => {
     console.error("FILES API ERROR:", error);
 
     res.status(500).json({
-      error: "Failed to fetch versions"
+      error: "Failed to fetch versions",
     });
   }
 });
 
 app.get("/api/file-diff", async (req, res) => {
   try {
-    const {
-      key,
-      oldVersionId,
-      newVersionId
-    } = req.query;
+    const { key, oldVersionId, newVersionId } = req.query;
 
     const oldFile = await s3.send(
       new GetObjectCommand({
         Bucket: BUCKET,
         Key: key as string,
-        VersionId: oldVersionId as string
-      })
+        VersionId: oldVersionId as string,
+      }),
     );
 
     const newFile = await s3.send(
       new GetObjectCommand({
         Bucket: BUCKET,
         Key: key as string,
-        VersionId: newVersionId as string
-      })
+        VersionId: newVersionId as string,
+      }),
     );
 
     const oldContent = await streamToString(oldFile.Body);
@@ -179,24 +171,20 @@ app.get("/api/file-diff", async (req, res) => {
       oldContent,
       newContent,
       cdnUrl: `${PUBLIC_SDK_S3_DOMAIN}/${key}`,
-      cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`
+      cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`,
     });
   } catch (error) {
     console.error("DIFF API ERROR:", error);
 
     res.status(500).json({
-      error: "Failed to fetch diff"
+      error: "Failed to fetch diff",
     });
   }
 });
 
 app.post("/api/upload", async (req, res) => {
   try {
-    const {
-      key,
-      content,
-      config
-    } = req.body;
+    const { key, content, config } = req.body;
 
     const finalContent = `${content}
 
@@ -207,20 +195,20 @@ ${config}`;
       new PutObjectCommand({
         Bucket: BUCKET,
         Key: key,
-        Body: finalContent
-      })
+        Body: finalContent,
+      }),
     );
 
     res.json({
       success: true,
       uploadedTo: `${PUBLIC_SDK_S3_DOMAIN}/${key}`,
-      cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`
+      cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`,
     });
   } catch (error) {
     console.error("UPLOAD API ERROR:", error);
 
     res.status(500).json({
-      error: "Upload failed"
+      error: "Upload failed",
     });
   }
 });
