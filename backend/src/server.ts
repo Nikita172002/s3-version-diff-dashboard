@@ -75,22 +75,8 @@ async function streamToString(stream: any): Promise<string> {
   });
 }
 
-async function streamToBuffer(stream: any): Promise<Buffer> {
-  return await new Promise((resolve, reject) => {
-    const chunks: any[] = [];
-
-    stream.on("data", (chunk: any) => chunks.push(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => resolve(Buffer.concat(chunks)));
-  });
-}
-
 app.get("/api/files", async (_req, res) => {
   try {
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.set("Pragma", "no-cache");
-    res.set("Expires", "0");
-
     const cutoff = getYesterday5PM();
 
     const versions = await s3.send(
@@ -130,8 +116,7 @@ app.get("/api/files", async (_req, res) => {
           older = v;
         }
 
-        // Keep updating so we end up with the latest version after cutoff.
-        if (ts > cutoff) {
+        if (ts > cutoff && !newer) {
           newer = v;
         }
       }
@@ -164,10 +149,6 @@ app.get("/api/files", async (_req, res) => {
 
 app.get("/api/file-diff", async (req, res) => {
   try {
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-    res.set("Pragma", "no-cache");
-    res.set("Expires", "0");
-
     const {
       key,
       oldVersionId,
@@ -214,104 +195,27 @@ app.post("/api/upload", async (req, res) => {
     const {
       key,
       content,
-      oldVersionId
+      config
     } = req.body;
 
-    console.log("[UPLOAD][BACKEND] Request received", {
-      key,
-      hasContent: typeof content === "string",
-      contentLength: typeof content === "string" ? content.length : null,
-      contentPreview: typeof content === "string" ? content.slice(0, 120) : null,
-      oldVersionId
+    const finalContent = `${content}
+
+ /* CONFIG UPDATE */
+${config}`;
+
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: finalContent
+      })
+    );
+
+    res.json({
+      success: true,
+      uploadedTo: `${PUBLIC_SDK_S3_DOMAIN}/${key}`,
+      cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`
     });
-
-    if (!key || typeof key !== "string") {
-      return res.status(400).json({
-        error: "Missing or invalid key"
-      });
-    }
-
-    if (typeof content === "string") {
-      console.log("[UPLOAD][BACKEND] Mode: direct content upload", {
-        key,
-        contentLength: content.length
-      });
-
-      const putResult = await s3.send(
-        new PutObjectCommand({
-          Bucket: BUCKET,
-          Key: key,
-          Body: content
-        })
-      );
-
-      console.log("[UPLOAD][BACKEND] New version created", {
-        key,
-        versionId: putResult.VersionId
-      });
-
-      res.json({
-        success: true,
-        mode: "content",
-        versionId: putResult.VersionId,
-        uploadedTo: `${PUBLIC_SDK_S3_DOMAIN}/${key}`,
-        cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`
-      });
-
-      return;
-    } else if (typeof oldVersionId === "string" && oldVersionId) {
-      console.log("[UPLOAD][BACKEND] Mode: restore old version", {
-        key,
-        oldVersionId
-      });
-
-      const oldFile = await s3.send(
-        new GetObjectCommand({
-          Bucket: BUCKET,
-          Key: key,
-          VersionId: oldVersionId
-        })
-      );
-
-      if (!oldFile.Body) {
-        return res.status(500).json({
-          error: "Failed to read old version body"
-        });
-      }
-
-      const oldBodyBuffer = await streamToBuffer(oldFile.Body);
-
-      const putResult = await s3.send(
-        new PutObjectCommand({
-          Bucket: BUCKET,
-          Key: key,
-          Body: oldBodyBuffer,
-          ContentLength: oldBodyBuffer.length,
-          ContentType: oldFile.ContentType
-        })
-      );
-
-      console.log("[UPLOAD][BACKEND] New version created from old version", {
-        key,
-        versionId: putResult.VersionId,
-        sourceVersionId: oldVersionId
-      });
-
-      res.json({
-        success: true,
-        mode: "oldVersionId",
-        sourceVersionId: oldVersionId,
-        versionId: putResult.VersionId,
-        uploadedTo: `${PUBLIC_SDK_S3_DOMAIN}/${key}`,
-        cloudfrontUrl: `https://${CF_DISTRIBUTION}.cloudfront.net/${key}`
-      });
-
-      return;
-    } else {
-      return res.status(400).json({
-        error: "Provide either content or oldVersionId"
-      });
-    }
   } catch (error) {
     console.error("UPLOAD API ERROR:", error);
 
